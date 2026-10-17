@@ -191,4 +191,34 @@ code=$?
 assert_exit_code "empty-dir-exit" 2 "$code"
 assert_contains "empty-dir-output" "$output" "No formulae found"
 
+# --- Case 6: parser invocation fails (PYTHON=/bin/false) must not pass ---
+cat > "$formula_dir/widget.rb" <<RB
+class Widget < Formula
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://example.invalid/widget_darwin_arm64.tar.gz"
+      sha256 "$good_sha"
+
+      define_method(:install) do
+        bin.install "widget"
+      end
+    end
+  end
+end
+RB
+output=$(env -i PATH="$stub_dir:/usr/bin:/bin" PYTHON=/bin/false FORMULA_DIR="$formula_dir" bash "$SCRIPT" 2>&1)
+code=$?
+assert_exit_code "parser-fail-exit" 1 "$code"
+assert_contains "parser-fail-output" "$output" "Triple extraction failed"
+output=$(env -i PATH="$stub_dir:/usr/bin:/bin" PYTHON=/bin/false FORMULA_DIR="$formula_dir" bash "$SCRIPT" --list 2>&1)
+code=$?
+assert_exit_code "parser-fail-list-exit" 1 "$code"
+
+# --- Case 7: formula yielding zero triples fails verify mode ---
+printf 'class Widget < Formula\nend\n' > "$formula_dir/widget.rb"
+output=$(env -i PATH="$stub_dir:/usr/bin:/bin" FORMULA_DIR="$formula_dir" bash "$SCRIPT" 2>&1)
+code=$?
+assert_exit_code "zero-triples-exit" 1 "$code"
+assert_contains "zero-triples-output" "$output" "Triple extraction failed"
+
 finish "verify_release_artifacts"
