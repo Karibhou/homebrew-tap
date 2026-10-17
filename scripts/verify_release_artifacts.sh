@@ -38,7 +38,9 @@
 # Exit codes:
 #   0 - every (url, sha256, binary) triple verified (or, under --list,
 #       triples were printed)
-#   1 - a download failure, sha256 mismatch, or missing binary was found
+#   1 - a download failure, sha256 mismatch, missing binary, or triple
+#       extraction failure/empty result was found (also under --list when
+#       extraction fails)
 #   2 - no formulae discovered (empty-suite regression guard)
 #
 # This is a safeguard script: no exporter, metrics backend, or external
@@ -111,10 +113,28 @@ fi
 for formula in "${formulae[@]}"; do
   name="$(basename "$formula" .rb)"
 
+  # Capture output and status before iterating: a failure inside a
+  # `< <(...)` process substitution is otherwise silently swallowed.
+  triples="$(extract_triples "$formula")"
+  extract_rc=$?
+  if [ "$extract_rc" -ne 0 ]; then
+    echo "::error title=Triple extraction failed::$name: formula_parser.py --triples exited $extract_rc for $formula" >&2
+    fail_count=$((fail_count + 1))
+    continue
+  fi
+
   if [ "$list_only" -eq 1 ]; then
-    while IFS=$'\t' read -r url sha bin_name; do
-      printf '%s\t%s\t%s\t%s\n' "$name" "$url" "$sha" "$bin_name"
-    done < <(extract_triples "$formula")
+    if [ -n "$triples" ]; then
+      while IFS=$'\t' read -r url sha bin_name; do
+        printf '%s\t%s\t%s\t%s\n' "$name" "$url" "$sha" "$bin_name"
+      done <<< "$triples"
+    fi
+    continue
+  fi
+
+  if [ -z "$triples" ]; then
+    echo "::error title=Triple extraction failed::$name: no (url, sha256, binary) triples extracted from $formula"
+    fail_count=$((fail_count + 1))
     continue
   fi
 
@@ -146,10 +166,13 @@ for formula in "${formulae[@]}"; do
     fi
     rm -rf "$tmp"
     echo "::endgroup::"
-  done < <(extract_triples "$formula")
+  done <<< "$triples"
 done
 
 if [ "$list_only" -eq 1 ]; then
+  if [ "$fail_count" -gt 0 ]; then
+    exit 1
+  fi
   exit 0
 fi
 
